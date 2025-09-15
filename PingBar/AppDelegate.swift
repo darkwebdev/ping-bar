@@ -11,6 +11,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var pingInterval: Double = 2.0
     var pingHost: String = "8.8.8.8"
     var maxHistory: Int = 50
+    
+    // Error tracking
+    var currentErrorMessage: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("applicationDidFinishLaunching")
@@ -18,16 +21,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         graphView = PingGraphView(frame: NSRect.zero)
-        graphView.appDelegate = self // Set the AppDelegate reference
+        graphView.appDelegate = self
         
-        // Set the view as the status item's custom view
         statusItem.button?.addSubview(graphView)
         
-        // Configure the status item button to handle clicks directly
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(statusBarButtonClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp]) // Handle both left and right clicks
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
         // Use Auto Layout to size the button based on the view's intrinsic content size
@@ -60,7 +61,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pingHistory.removeFirst()
         }
         
-        // Update graph
         graphView.pingData = pingHistory
         graphView.currentPing = result
         graphView.needsDisplay = true
@@ -88,7 +88,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func statusBarButtonClicked() {
-        print("Status bar button clicked")
         showPopupMenu()
     }
     
@@ -105,6 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             popupMenuManager.showPopupMenu(
                 with: currentPingData,
                 currentPing: currentPingValue,
+                errorMessage: currentErrorMessage,
                 at: NSPoint(x: 0, y: 0),
                 in: button
             )
@@ -133,12 +133,12 @@ extension AppDelegate: PopupMenuDelegate {
 // MARK: - PingManagerDelegate
 extension AppDelegate: PingManagerDelegate {
     func pingManager(_ manager: PingManager, didReceivePingResult result: Int) {
-        print("AppDelegate received ping result: \(result)")
+        currentErrorMessage = nil // Clear error on successful ping
         addPingResult(result)
     }
     
-    func pingManager(_ manager: PingManager, didTimeout: Void) {
-        print("AppDelegate received timeout")
-        addPingResult(0) // 0 represents no response
+    func pingManager(_ manager: PingManager, didFailWithError error: String) {
+        currentErrorMessage = error
+        addPingResult(0) // Still add 0 for graph display
     }
 }

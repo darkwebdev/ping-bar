@@ -62,7 +62,7 @@ class SettingsWindow: NSObject {
         guard let appDelegate = appDelegate else { return }
         
         // Host field
-        let hostLabel = NSTextField(labelWithString: "Ping Host:")
+        let hostLabel = NSTextField(labelWithString: "Ping host:")
         hostLabel.frame = NSRect(x: 20, y: 140, width: 80, height: 20)
         contentView.addSubview(hostLabel)
         
@@ -87,7 +87,7 @@ class SettingsWindow: NSObject {
         contentView.addSubview(intervalField)
         
         // History count field
-        let historyLabel = NSTextField(labelWithString: "Max History:")
+        let historyLabel = NSTextField(labelWithString: "Max history:")
         historyLabel.frame = NSRect(x: 20, y: 60, width: 80, height: 20)
         contentView.addSubview(historyLabel)
         
@@ -158,5 +158,15 @@ extension SettingsWindow: NSTextFieldDelegate {
                 historyChanged(textField)
             }
         }
+    }
+    
+    // Handle Enter key press in text fields
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            // Enter key was pressed - save settings
+            saveSettings()
+            return true
+        }
+        return false
     }
 }

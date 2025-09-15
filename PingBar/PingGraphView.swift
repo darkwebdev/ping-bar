@@ -44,7 +44,6 @@ class PingGraphView: NSView {
         
         let barWidth: CGFloat = 1.0
         let barCount = Int(graphRect.width / barWidth)
-        let maxPing: CGFloat = 200 // Fixed maximum height at 200ms
         
         // Draw bars from most recent data
         let startIndex = max(0, pingData.count - barCount)
@@ -52,27 +51,30 @@ class PingGraphView: NSView {
         
         for (index, ping) in relevantData.enumerated() {
             let x = graphRect.minX + CGFloat(index) * barWidth
-            // Cap the ping value at 200ms for height calculation
-            let cappedPing = min(CGFloat(ping), maxPing)
-            let barHeight = ping == 0 ? graphRect.height : (cappedPing / maxPing) * graphRect.height
-            let y = graphRect.minY
             
+            var barHeight: CGFloat = 0
+            let barColor: NSColor
+            if ping > 0 {
+                let logValue = Foundation.log10(Double(ping) + 1.0)
+                let maxLogValue = Foundation.log10(201.0) // log10(200 + 1) for max scale
+                barHeight = CGFloat(logValue / maxLogValue) * graphRect.height
+                if ping <= 100 {
+                    barColor = .systemGreen
+                } else {
+                    barColor = .systemYellow
+                }
+            } else {
+                barHeight = graphRect.height
+                barColor = .systemRed
+            }
+            
+            let y = graphRect.minY
             let barRect = NSRect(
                 x: x,
                 y: y,
                 width: barWidth,
                 height: barHeight
             )
-            
-            // Color based on ping value
-            let barColor: NSColor
-            if ping == 0 { // No response
-                barColor = .systemRed
-            } else if ping <= 100 {
-                barColor = .systemGreen
-            } else {
-                barColor = .systemYellow
-            }
             
             barColor.setFill()
             NSBezierPath(rect: barRect).fill()
