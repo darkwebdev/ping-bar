@@ -2,21 +2,26 @@ import Cocoa
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
-    var pingHistory: [Int] = []
     var graphView: PingGraphView!
-    var settingsWindow: SettingsWindow?
-    var pingManager: PingManager!
+    var multiHostPingManager: MultiHostPingManager!
+    var currentPopupMenuManager: PopupMenuManager?
     
-    // Settings properties
-    var pingInterval: Double = 2.0
-    var pingHost: String = "8.8.8.8"
-    var maxHistory: Int = 50
+    // Settings properties - now loaded from SettingsManager
+    var pingInterval: Double {
+        get { SettingsManager.shared.pingInterval }
+        set { SettingsManager.shared.pingInterval = newValue }
+    }
     
-    // Error tracking
-    var currentErrorMessage: String?
+    var maxHistory: Int {
+        get { SettingsManager.shared.maxHistory }
+        set { SettingsManager.shared.maxHistory = newValue }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("applicationDidFinishLaunching")
+        
+        // Load settings from persistent storage
+        SettingsManager.shared.loadDefaults()
         
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
@@ -40,85 +45,83 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             graphView.bottomAnchor.constraint(equalTo: statusItem.button!.bottomAnchor)
         ])
         
-        setupPingManager()
+        setupMultiHostPingManager()
     }
     
-    func setupPingManager() {
-        pingManager = PingManager()
-        pingManager.delegate = self
-        pingManager.pingHost = pingHost
-        pingManager.pingInterval = pingInterval
-        pingManager.startPinging()
-    }
-    
-    func startPingTimer() {
-        pingManager.updateInterval(pingInterval)
-    }
-
-    func addPingResult(_ result: Int) {
-        pingHistory.append(result)
-        if pingHistory.count > maxHistory {
-            pingHistory.removeFirst()
-        }
+    func setupMultiHostPingManager() {
+        multiHostPingManager = MultiHostPingManager()
+        multiHostPingManager.delegate = self
+        multiHostPingManager.pingInterval = pingInterval
+        multiHostPingManager.maxHistory = maxHistory
         
-        graphView.pingData = pingHistory
-        graphView.currentPing = result
-        graphView.needsDisplay = true
+        // Load hosts from settings instead of using hardcoded defaults
+        let savedHosts = SettingsManager.shared.hosts
+        for host in savedHosts {
+            multiHostPingManager.addHost(host)
+        }
     }
     
     @objc func clearPingHistory() {
-        pingHistory.removeAll()
-        graphView.pingData = pingHistory  // Update the view's data with the cleared history
-        graphView.currentPing = 0  // Reset current ping display
-        graphView.needsDisplay = true
+        multiHostPingManager.clearHistory()
     }
     
-    @objc func hostChanged(_ sender: NSTextField) {
-        pingHost = sender.stringValue
-        pingManager.updateHost(pingHost)
-    }
-    
-    @objc func intervalChanged(_ sender: NSTextField) {
-        pingInterval = max(0.5, sender.doubleValue)
-        pingManager.updateInterval(pingInterval)
-    }
-    
-    @objc func historyChanged(_ sender: NSTextField) {
-        maxHistory = max(10, sender.integerValue)
-    }
-
     @objc func statusBarButtonClicked() {
         showPopupMenu()
     }
     
     func showPopupMenu() {
-        // Create popup menu manager if it doesn't exist
-        let popupMenuManager = PopupMenuManager(delegate: self)
+        let popupMenuManager = PopupMenuManager(
+            delegate: self,
+            pingInterval: pingInterval,
+            maxHistory: maxHistory,
+            appDelegate: self
+        )
         
-        // Get the current ping data and status
-        let currentPingData = pingHistory
-        let currentPingValue = graphView.currentPing
+        // Keep reference to the active popup menu manager
+        self.currentPopupMenuManager = popupMenuManager
         
-        // Show the popup menu at the status bar button location
+        let hosts = multiHostPingManager.getAllHosts()
+        
         if let button = statusItem.button {
             popupMenuManager.showPopupMenu(
-                with: currentPingData,
-                currentPing: currentPingValue,
-                errorMessage: currentErrorMessage,
+                with: hosts,
                 at: NSPoint(x: 0, y: 0),
                 in: button
             )
         }
     }
+    
+    // Add method to handle menu closing
+    func popupMenuDidClose() {
+        currentPopupMenuManager?.menuDidClose()
+        currentPopupMenuManager = nil
+    }
 }
 
 // MARK: - PopupMenuDelegate
 extension AppDelegate: PopupMenuDelegate {
-    func showSettings() {
-        if settingsWindow == nil {
-            settingsWindow = SettingsWindow(appDelegate: self)
-        }
-        settingsWindow?.show()
+    func addHost(_ host: String) {
+        multiHostPingManager.addHost(host)
+        SettingsManager.shared.addHost(host)
+        SettingsManager.shared.save()
+    }
+    
+    func removeHost(_ host: String) {
+        multiHostPingManager.removeHost(host)
+        SettingsManager.shared.removeHost(host)
+        SettingsManager.shared.save()
+    }
+    
+    func updateInterval(_ interval: Double) {
+        pingInterval = interval
+        multiHostPingManager.pingInterval = interval
+        SettingsManager.shared.save()
+    }
+    
+    func updateMaxHistory(_ maxHistory: Int) {
+        self.maxHistory = maxHistory
+        multiHostPingManager.maxHistory = maxHistory
+        SettingsManager.shared.save()
     }
     
     func clearHistory() {
@@ -130,15 +133,27 @@ extension AppDelegate: PopupMenuDelegate {
     }
 }
 
-// MARK: - PingManagerDelegate
-extension AppDelegate: PingManagerDelegate {
-    func pingManager(_ manager: PingManager, didReceivePingResult result: Int) {
-        currentErrorMessage = nil // Clear error on successful ping
-        addPingResult(result)
+// MARK: - MultiHostPingManagerDelegate
+extension AppDelegate: MultiHostPingManagerDelegate {
+    func multiHostPingManager(_ manager: MultiHostPingManager, didUpdateHosts hosts: [HostData]) {
+        // Update the status bar graph view
+        graphView.hostData = hosts
+        graphView.needsDisplay = true
+        
+        // Update the popup menu if it's currently open
+        if let popupMenuManager = currentPopupMenuManager {
+            popupMenuManager.updateMenuContent(with: hosts)
+        }
     }
     
-    func pingManager(_ manager: PingManager, didFailWithError error: String) {
-        currentErrorMessage = error
-        addPingResult(0) // Still add 0 for graph display
+    func multiHostPingManager(_ manager: MultiHostPingManager, didReceivePingResult result: Int, forHost host: String) {
+        // Individual ping updates are handled in didUpdateHosts
+        // This method can be left empty or used for logging if needed
+    }
+    
+    func multiHostPingManager(_ manager: MultiHostPingManager, didFailWithError error: String, forHost host: String) {
+        // Individual ping errors are handled in didUpdateHosts
+        // This method can be left empty or used for logging if needed
+        print("Ping failed for host \(host): \(error)")
     }
 }

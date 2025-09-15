@@ -85,6 +85,11 @@ class PingManager: NSObject {
         stopPinging()
         timer = Timer.scheduledTimer(timeInterval: pingInterval, target: self, selector: #selector(performPing), userInfo: nil, repeats: true)
         
+        // Add timer to common run loop modes so it continues running during menu display
+        if let timer = timer {
+            RunLoop.current.add(timer, forMode: .common)
+        }
+        
         performPing()
     }
     

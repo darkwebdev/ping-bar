@@ -7,9 +7,8 @@
 import Cocoa
 
 class PingGraphView: NSView {
-    var pingData: [Int] = []
-    var currentPing: Int = 0
-    weak var appDelegate: AppDelegate? // Keep reference for potential future use
+    var hostData: [HostData] = []
+    weak var appDelegate: AppDelegate?
     
     override var intrinsicContentSize: NSSize {
         let minGraphWidth: CGFloat = 60
@@ -40,44 +39,61 @@ class PingGraphView: NSView {
             height: bounds.height - 4
         )
         
-        guard !pingData.isEmpty && graphRect.width > 0 else { return }
+        guard !hostData.isEmpty && graphRect.width > 0 else { return }
         
-        let barWidth: CGFloat = 1.0
-        let barCount = Int(graphRect.width / barWidth)
+        // Find the maximum number of data points across all hosts
+        let maxDataPoints = hostData.map { $0.pingHistory.count }.max() ?? 0
+        guard maxDataPoints > 0 else { return }
         
-        // Draw bars from most recent data
-        let startIndex = max(0, pingData.count - barCount)
-        let relevantData = Array(pingData[startIndex...])
+        let pointWidth: CGFloat = graphRect.width / CGFloat(max(1, maxDataPoints - 1))
         
-        for (index, ping) in relevantData.enumerated() {
-            let x = graphRect.minX + CGFloat(index) * barWidth
+        // Draw each host's line graph
+        for host in hostData {
+            drawLineGraph(for: host, in: graphRect, pointWidth: pointWidth)
+        }
+    }
+    
+    private func drawLineGraph(for host: HostData, in graphRect: NSRect, pointWidth: CGFloat) {
+        guard host.pingHistory.count > 1 else { return }
+        
+        let path = NSBezierPath()
+        var hasValidPoints = false
+        
+        for (index, ping) in host.pingHistory.enumerated() {
+            let x = graphRect.minX + CGFloat(index) * pointWidth
+            var y: CGFloat
             
-            var barHeight: CGFloat = 0
-            let barColor: NSColor
             if ping > 0 {
+                // Convert ping time to logarithmic scale for better visualization
                 let logValue = Foundation.log10(Double(ping) + 1.0)
                 let maxLogValue = Foundation.log10(201.0) // log10(200 + 1) for max scale
-                barHeight = CGFloat(logValue / maxLogValue) * graphRect.height
-                if ping <= 100 {
-                    barColor = .systemGreen
+                let normalizedHeight = CGFloat(logValue / maxLogValue)
+                y = graphRect.minY + normalizedHeight * graphRect.height
+                
+                if !hasValidPoints {
+                    path.move(to: NSPoint(x: x, y: y))
+                    hasValidPoints = true
                 } else {
-                    barColor = .systemYellow
+                    path.line(to: NSPoint(x: x, y: y))
                 }
             } else {
-                barHeight = graphRect.height
-                barColor = .systemRed
+                // For failed pings (0), draw at the bottom of the graph
+                y = graphRect.minY
+                
+                if !hasValidPoints {
+                    path.move(to: NSPoint(x: x, y: y))
+                    hasValidPoints = true
+                } else {
+                    path.line(to: NSPoint(x: x, y: y))
+                }
             }
-            
-            let y = graphRect.minY
-            let barRect = NSRect(
-                x: x,
-                y: y,
-                width: barWidth,
-                height: barHeight
-            )
-            
-            barColor.setFill()
-            NSBezierPath(rect: barRect).fill()
+        }
+        
+        if hasValidPoints {
+            // Set the line color based on host color
+            host.color.setStroke()
+            path.lineWidth = 1.5
+            path.stroke()
         }
     }
 }
