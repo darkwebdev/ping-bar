@@ -3,19 +3,67 @@ import Cocoa
 // MARK: - Custom Menu Item View
 class HostMenuItemView: NSView {
     private let statusIndicator: NSView
+    private let removeButton: NSButton
     private let hostLabel: NSTextField
     private let pingLabel: NSTextField
-    private let miniGraphView: MiniPingGraphView
-    private var host: HostData
+    let miniGraphView: MiniPingGraphView
+    var host: HostData
+    private var trackingArea: NSTrackingArea?
+    weak var delegate: PopupMenuDelegate?
+    weak var menuManager: PopupMenuManager?
+    
+    // Static property to track maximum hostname width across all instances
+    static var maxHostnameWidth: CGFloat = 0
+    static var currentMaxHistory: Int = 50 // Track current max history setting
+    
+    // Calculate dynamic graph width based on max history setting
+    static func calculateGraphWidth(for maxHistory: Int) -> CGFloat {
+        let barWidth: CGFloat = 2.0
+        let barSpacing: CGFloat = 1.0
+        let totalBarWidth = barWidth + barSpacing
+        let minWidth: CGFloat = 60 // Minimum width for small history values
+        let maxWidth: CGFloat = 300 // Maximum width to prevent menu from becoming too wide
+        
+        // Calculate width needed for maxHistory bars plus padding
+        let calculatedWidth = CGFloat(maxHistory) * totalBarWidth - barSpacing + 8 // +8 for padding
+        
+        // Clamp between min and max values
+        return max(minWidth, min(maxWidth, calculatedWidth))
+    }
     
     init(host: HostData) {
         self.host = host
         self.statusIndicator = NSView()
+        self.removeButton = NSButton()
         self.hostLabel = NSTextField()
         self.pingLabel = NSTextField()
         self.miniGraphView = MiniPingGraphView(hostData: host)
         
-        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 38))
+        // Set the hostname first so we can calculate proper width
+        hostLabel.stringValue = host.host
+        hostLabel.font = NSFont.menuFont(ofSize: 13)
+        
+        // Calculate the ACTUAL width needed for this specific hostname (not truncated)
+        let actualHostnameWidth = host.host.size(withAttributes: [.font: NSFont.menuFont(ofSize: 13)]).width
+        
+        // Update the static maxHostnameWidth if this hostname is longer
+        if actualHostnameWidth > HostMenuItemView.maxHostnameWidth {
+            HostMenuItemView.maxHostnameWidth = actualHostnameWidth
+        }
+        
+        // Calculate DYNAMIC width based on content and max history setting
+        let graphWidth = HostMenuItemView.calculateGraphWidth(for: HostMenuItemView.currentMaxHistory)
+        let rightMargin: CGFloat = 12
+        let gapBetweenHostnameAndGraph: CGFloat = 30 // Increased gap to ensure no overlap
+        let statusAreaWidth: CGFloat = 12 + 8 + 8 // 28 total (margin + indicator + spacing)
+        
+        // Use the maximum hostname width to ensure ALL hostnames fit without truncation
+        let maxHostnameWidth = HostMenuItemView.maxHostnameWidth
+        
+        // Calculate total menu width dynamically - ensure it fits the longest hostname completely
+        let totalMenuWidth = statusAreaWidth + maxHostnameWidth + gapBetweenHostnameAndGraph + graphWidth + rightMargin
+        
+        super.init(frame: NSRect(x: 0, y: 0, width: totalMenuWidth, height: 38))
         setupViews()
         updateContent()
     }
@@ -25,7 +73,15 @@ class HostMenuItemView: NSView {
     }
     
     override var intrinsicContentSize: NSSize {
-        return NSSize(width: 280, height: 38)
+        // Calculate dynamic width based on current max hostname width and graph width
+        let graphWidth = HostMenuItemView.calculateGraphWidth(for: HostMenuItemView.currentMaxHistory)
+        let rightMargin: CGFloat = 12
+        let gapBetweenHostnameAndGraph: CGFloat = 30 // Match the gap used in init
+        let statusAreaWidth: CGFloat = 12 + 8 + 8 // 28 total
+        
+        let totalMenuWidth = statusAreaWidth + HostMenuItemView.maxHostnameWidth + gapBetweenHostnameAndGraph + graphWidth + rightMargin
+        
+        return NSSize(width: totalMenuWidth, height: 38)
     }
     
     private func setupViews() {
@@ -35,12 +91,29 @@ class HostMenuItemView: NSView {
         statusIndicator.layer?.cornerRadius = 4
         addSubview(statusIndicator)
         
+        // Remove button (red cross) - initially hidden
+        removeButton.translatesAutoresizingMaskIntoConstraints = false
+        removeButton.title = "✕"
+        removeButton.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        removeButton.bezelStyle = .circular
+        removeButton.isBordered = false
+        removeButton.wantsLayer = true
+        removeButton.layer?.backgroundColor = NSColor.systemRed.cgColor
+        removeButton.layer?.cornerRadius = 8
+        removeButton.contentTintColor = .white
+        removeButton.target = self
+        removeButton.action = #selector(removeButtonClicked)
+        removeButton.isHidden = true
+        removeButton.alphaValue = 0.0
+        addSubview(removeButton)
+        
         // Host label
         hostLabel.translatesAutoresizingMaskIntoConstraints = false
         hostLabel.isEditable = false
         hostLabel.isBordered = false
         hostLabel.backgroundColor = .clear
         hostLabel.font = NSFont.menuFont(ofSize: 13)
+        hostLabel.lineBreakMode = .byClipping // Prevent truncation - we'll size the menu to fit
         addSubview(hostLabel)
         
         // Ping label
@@ -56,37 +129,99 @@ class HostMenuItemView: NSView {
         miniGraphView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(miniGraphView)
         
-        // Layout constraints with proper spacing and sizing
+        // Calculate dynamic layout values based on the MAXIMUM hostname width
+        let statusAreaWidth: CGFloat = 12 + 8 + 8 // 28 total
+        let gapBetweenHostnameAndGraph: CGFloat = 30 // Match the gap used in init method
+        let graphWidth = HostMenuItemView.calculateGraphWidth(for: HostMenuItemView.currentMaxHistory)
+        
+        // Use the maximum hostname width to ensure no truncation
+        let effectiveMaxWidth = HostMenuItemView.maxHostnameWidth
+        
+        // Calculate graph start position to ensure no overlap
+        let graphStartPosition = statusAreaWidth + effectiveMaxWidth + gapBetweenHostnameAndGraph
+        
+        // Layout constraints - ensure hostname gets full width it needs
         NSLayoutConstraint.activate([
             // Status indicator
-            statusIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            statusIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             statusIndicator.centerYAnchor.constraint(equalTo: centerYAnchor),
             statusIndicator.widthAnchor.constraint(equalToConstant: 8),
             statusIndicator.heightAnchor.constraint(equalToConstant: 8),
             
-            // Host label
+            // Remove button (positioned over status indicator)
+            removeButton.centerXAnchor.constraint(equalTo: statusIndicator.centerXAnchor),
+            removeButton.centerYAnchor.constraint(equalTo: statusIndicator.centerYAnchor),
+            removeButton.widthAnchor.constraint(equalToConstant: 16),
+            removeButton.heightAnchor.constraint(equalToConstant: 16),
+        
+            // Host label - EXACT width to prevent truncation, using the maximum calculated width
             hostLabel.leadingAnchor.constraint(equalTo: statusIndicator.trailingAnchor, constant: 8),
             hostLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            hostLabel.widthAnchor.constraint(equalToConstant: 110),
+            hostLabel.widthAnchor.constraint(equalToConstant: effectiveMaxWidth),
             
-            // Ping label - with proper bottom spacing
+            // Ping label - positioned under host label, same width as host label
             pingLabel.leadingAnchor.constraint(equalTo: statusIndicator.trailingAnchor, constant: 8),
             pingLabel.topAnchor.constraint(equalTo: hostLabel.bottomAnchor, constant: 1),
             pingLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -3),
-            pingLabel.widthAnchor.constraint(equalToConstant: 110),
+            pingLabel.widthAnchor.constraint(equalToConstant: effectiveMaxWidth),
             
-            // Mini graph - right-aligned with proper spacing
-            miniGraphView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            // Mini graph - positioned with guaranteed separation from hostname area
+            miniGraphView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: graphStartPosition),
             miniGraphView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            miniGraphView.widthAnchor.constraint(equalToConstant: 120),
+            miniGraphView.widthAnchor.constraint(equalToConstant: graphWidth),
             miniGraphView.heightAnchor.constraint(equalToConstant: 22),
             
-            // Ensure minimum spacing between labels and graph
-            miniGraphView.leadingAnchor.constraint(greaterThanOrEqualTo: hostLabel.trailingAnchor, constant: 12),
-            
-            // Overall height matches frame
+            // Overall height
             heightAnchor.constraint(equalToConstant: 38)
         ])
+        
+        // Setup tracking area for mouse events
+        setupTracking()
+    }
+    
+    private func setupTracking() {
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow]
+        trackingArea = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+    
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        
+        if let trackingArea = trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        
+        setupTracking()
+    }
+    
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        showRemoveButton()
+    }
+    
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hideRemoveButton()
+    }
+    
+    private func showRemoveButton() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            removeButton.isHidden = false
+            removeButton.animator().alphaValue = 1.0
+            statusIndicator.animator().alphaValue = 0.3
+        }
+    }
+    
+    private func hideRemoveButton() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            removeButton.animator().alphaValue = 0.0
+            statusIndicator.animator().alphaValue = 1.0
+        } completionHandler: {
+            self.removeButton.isHidden = true
+        }
     }
     
     private func updateContent() {
@@ -95,13 +230,13 @@ class HostMenuItemView: NSView {
         // Update status indicator color based on ping status
         let statusColor: NSColor
         if host.currentPing == 0 {
-            statusColor = .systemRed // Red for failed ping
-            pingLabel.stringValue = host.errorMessage ?? "Ping failed"
+            statusColor = .systemRed
+            pingLabel.stringValue = "-"
         } else if host.currentPing > 100 {
-            statusColor = .systemYellow // Yellow for slow ping
+            statusColor = .systemYellow
             pingLabel.stringValue = "\(host.currentPing)ms"
         } else {
-            statusColor = .systemGreen // Green for good ping
+            statusColor = .systemGreen
             pingLabel.stringValue = "\(host.currentPing)ms"
         }
         
@@ -110,25 +245,28 @@ class HostMenuItemView: NSView {
     }
     
     func updateWithNewData(_ newHost: HostData) {
-        // Ensure updates happen on main thread
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Update the view with new host data
             self.host = newHost
             self.miniGraphView.updateHostData(newHost)
             self.updateContent()
             
-            // Force view refresh
             self.needsDisplay = true
             self.needsLayout = true
         }
+    }
+    
+    @objc private func removeButtonClicked() {
+        let hostToRemove = host.host
+        delegate?.removeHost(hostToRemove)
     }
 }
 
 // MARK: - Mini Ping Graph View
 class MiniPingGraphView: NSView {
     private var hostData: HostData
+    private var maxHistory: Int = 50
     
     init(hostData: HostData) {
         self.hostData = hostData
@@ -149,6 +287,11 @@ class MiniPingGraphView: NSView {
         needsDisplay = true
     }
     
+    func updateMaxHistory(_ newMaxHistory: Int) {
+        self.maxHistory = newMaxHistory
+        needsDisplay = true
+    }
+    
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         
@@ -156,43 +299,72 @@ class MiniPingGraphView: NSView {
         NSColor.clear.setFill()
         bounds.fill()
         
+        // Check if there's an error
+        if hostData.currentPing == 0 && hostData.errorMessage != nil {
+            let errorText = hostData.errorMessage ?? "Error"
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 8),
+                .foregroundColor: NSColor.systemRed
+            ]
+            
+            let attributedString = NSAttributedString(string: errorText, attributes: attributes)
+            let textRect = NSRect(
+                x: bounds.minX,
+                y: bounds.minY + 1,
+                width: bounds.width,
+                height: bounds.height - 2
+            )
+            
+            let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+            attributedString.draw(with: textRect, options: options, context: nil)
+            return
+        }
+        
         guard !hostData.pingHistory.isEmpty else { return }
         
-        // Reduced internal spacing - minimal inset for maximum graph area
+        let maxHistoryToShow = min(hostData.pingHistory.count, maxHistory)
         let graphRect = bounds.insetBy(dx: 1, dy: 1)
-        let history = Array(hostData.pingHistory.suffix(20)) // Show last 20 data points
+        let history = Array(hostData.pingHistory.suffix(maxHistoryToShow))
         
-        guard history.count > 1 else { return }
+        guard !history.isEmpty else { return }
         
-        let pointWidth = graphRect.width / CGFloat(history.count - 1)
+        let barWidth: CGFloat = 2.0
+        let barSpacing: CGFloat = 1.0
+        let totalBarWidth = barWidth + barSpacing
         let maxPing = history.filter { $0 > 0 }.max() ?? 100
         
-        let path = NSBezierPath()
-        var hasValidPoints = false
+        let totalGraphWidth = CGFloat(history.count) * totalBarWidth - barSpacing
+        let startX = graphRect.maxX - totalGraphWidth
         
         for (index, ping) in history.enumerated() {
-            let x = graphRect.minX + CGFloat(index) * pointWidth
-            let y: CGFloat
+            let x = startX + CGFloat(index) * totalBarWidth
+            let barHeight: CGFloat
             
             if ping > 0 {
                 let normalizedHeight = CGFloat(ping) / CGFloat(maxPing)
-                y = graphRect.minY + normalizedHeight * graphRect.height
+                barHeight = normalizedHeight * graphRect.height
             } else {
-                y = graphRect.minY
+                barHeight = 2
             }
             
-            if !hasValidPoints {
-                path.move(to: NSPoint(x: x, y: y))
-                hasValidPoints = true
+            let barRect = NSRect(
+                x: x,
+                y: graphRect.minY,
+                width: barWidth,
+                height: barHeight
+            )
+            
+            let barColor: NSColor
+            if ping == 0 {
+                barColor = .systemRed
+            } else if ping > 100 {
+                barColor = .systemYellow
             } else {
-                path.line(to: NSPoint(x: x, y: y))
+                barColor = NSColor(red: 40/255.0, green: 240/255.0, blue: 240/255.0, alpha: 1.0)
             }
-        }
-        
-        if hasValidPoints {
-            hostData.color.withAlphaComponent(0.8).setStroke()
-            path.lineWidth = 1.0
-            path.stroke()
+            
+            barColor.setFill()
+            barRect.fill()
         }
     }
 }
@@ -212,7 +384,7 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     private var maxHistory: Int = 50
     private var currentHosts: [HostData] = []
     private var hostMenuViews: [String: HostMenuItemView] = [:]
-    private var currentMenu: NSMenu?
+    var currentMenu: NSMenu?
     weak var appDelegate: AppDelegate?
     
     init(delegate: PopupMenuDelegate, pingInterval: Double, maxHistory: Int, appDelegate: AppDelegate? = nil) {
@@ -220,6 +392,10 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         self.pingInterval = pingInterval
         self.maxHistory = maxHistory
         self.appDelegate = appDelegate
+        
+        // Set the static currentMaxHistory so all views use the correct setting
+        HostMenuItemView.currentMaxHistory = maxHistory
+        
         super.init()
     }
     
@@ -231,34 +407,23 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         showMenu(menu, at: location, in: view)
     }
     
-    // MARK: - NSMenuDelegate
     func menuDidClose(_ menu: NSMenu) {
-        // Clean up when menu closes
         menuDidClose()
         appDelegate?.popupMenuDidClose()
     }
     
-    // Add method to update menu content in real time
     func updateMenuContent(with hosts: [HostData]) {
-        // Ensure UI updates happen on the main thread
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let menu = self.currentMenu else { return }
+            guard let self = self else { return }
             
             self.currentHosts = hosts
             
-            // Update existing host views
             for host in hosts {
                 if let hostView = self.hostMenuViews[host.host] {
                     hostView.updateWithNewData(host)
                 }
             }
         }
-    }
-    
-    // Clear references when menu is dismissed
-    func menuDidClose() {
-        hostMenuViews.removeAll()
-        currentMenu = nil
     }
     
     private func addStatusItems(for hosts: [HostData], to menu: NSMenu) {
@@ -270,19 +435,39 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
             return
         }
         
-        // Add custom view for each host
+        // Reset the maximum hostname width
+        HostMenuItemView.maxHostnameWidth = 0
+        
+        // Calculate maximum hostname width across all hosts
+        for host in hosts {
+            let hostnameSize = host.host.size(withAttributes: [
+                .font: NSFont.menuFont(ofSize: 13)
+            ])
+            if hostnameSize.width > HostMenuItemView.maxHostnameWidth {
+                HostMenuItemView.maxHostnameWidth = hostnameSize.width
+            }
+        }
+        
+        // Create views with the correct max width
         for host in hosts {
             let hostItem = NSMenuItem()
             let hostView = HostMenuItemView(host: host)
+            hostView.delegate = self.delegate
+            hostView.menuManager = self
+            hostView.miniGraphView.updateMaxHistory(self.maxHistory)
             hostItem.view = hostView
             hostItem.isEnabled = false
             menu.addItem(hostItem)
             
-            // Keep a reference to the host view for real-time updates
             hostMenuViews[host.host] = hostView
         }
         
         menu.addItem(NSMenuItem.separator())
+    }
+    
+    func menuDidClose() {
+        hostMenuViews.removeAll()
+        currentMenu = nil
     }
     
     private func createPopupMenu(with hosts: [HostData]) -> NSMenu {
@@ -303,30 +488,10 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     }
     
     private func addSettingsItems(to menu: NSMenu) {
-        // Host Management section
+        // Add Host item
         let addHostItem = NSMenuItem(title: "Add Host...", action: #selector(showAddHostDialog), keyEquivalent: "")
         addHostItem.target = self
         menu.addItem(addHostItem)
-        
-        // Remove Host submenu
-        let removeHostItem = NSMenuItem(title: "Remove Host", action: nil, keyEquivalent: "")
-        let removeSubmenu = NSMenu()
-        
-        for host in currentHosts {
-            let hostRemoveItem = NSMenuItem(title: host.host, action: #selector(removeHostAction(_:)), keyEquivalent: "")
-            hostRemoveItem.target = self
-            hostRemoveItem.representedObject = host.host
-            removeSubmenu.addItem(hostRemoveItem)
-        }
-        
-        if currentHosts.isEmpty {
-            let noHostsItem = NSMenuItem(title: "No hosts to remove", action: nil, keyEquivalent: "")
-            noHostsItem.isEnabled = false
-            removeSubmenu.addItem(noHostsItem)
-        }
-        
-        removeHostItem.submenu = removeSubmenu
-        menu.addItem(removeHostItem)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -370,14 +535,11 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     }
     
     private func showMenu(_ menu: NSMenu, at location: NSPoint, in view: NSView) {
-        // Force the menu to calculate its size properly
         menu.update()
         
         if let button = view as? NSButton {
-            // Position menu below the status bar button with proper positioning
             menu.popUp(positioning: menu.items.first, at: NSPoint(x: 0, y: button.bounds.height), in: button)
         } else {
-            // Fallback: try to find button in superview
             if let button = view.superview as? NSButton {
                 menu.popUp(positioning: menu.items.first, at: NSPoint(x: 0, y: button.bounds.height), in: button)
             }
@@ -386,13 +548,13 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     
     @objc private func showAddHostDialog() {
         let alert = NSAlert()
-        alert.messageText = "Add New Host"
-        alert.informativeText = "Enter the hostname or IP address to monitor:"
+        alert.messageText = "Add Host"
+        alert.informativeText = "Enter hostname or IP address:"
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
         
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        textField.placeholderString = "e.g., google.com or 192.168.1.1"
+        textField.placeholderString = "e.g., google.com"
         alert.accessoryView = textField
         
         let response = alert.runModal()
@@ -404,11 +566,6 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         }
     }
     
-    @objc private func removeHostAction(_ sender: NSMenuItem) {
-        guard let hostName = sender.representedObject as? String else { return }
-        delegate?.removeHost(hostName)
-    }
-    
     @objc private func setInterval(_ sender: NSMenuItem) {
         guard let interval = sender.representedObject as? Double else { return }
         pingInterval = interval
@@ -418,6 +575,15 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     @objc private func setMaxHistory(_ sender: NSMenuItem) {
         guard let history = sender.representedObject as? Int else { return }
         maxHistory = history
+        
+        // Update the static currentMaxHistory so all views use the new setting
+        HostMenuItemView.currentMaxHistory = history
+        
+        // Update all existing host views with the new max history
+        for hostView in hostMenuViews.values {
+            hostView.miniGraphView.updateMaxHistory(history)
+        }
+        
         delegate?.updateMaxHistory(history)
     }
     
