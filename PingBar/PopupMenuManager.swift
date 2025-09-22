@@ -292,6 +292,48 @@ class MiniPingGraphView: NSView {
         needsDisplay = true
     }
     
+    private func colorForPing(_ ping: Int) -> NSColor {
+        // Define thresholds for ping quality
+        let goodPingThreshold: Double = 20   // <= 20ms is excellent (cyan)
+        let badPingThreshold: Double = 100   // >= 100ms is poor (yellow)
+        
+        if ping <= 0 {
+            // Failed ping - use red
+            return NSColor.systemRed
+        }
+        
+        let pingValue = Double(ping)
+        
+        if pingValue <= goodPingThreshold {
+            // Excellent ping - cyan
+            return NSColor.systemCyan
+        } else if pingValue >= badPingThreshold {
+            // Poor ping - yellow
+            return NSColor.systemYellow
+        } else {
+            // Interpolate between cyan and yellow
+            let ratio = (pingValue - goodPingThreshold) / (badPingThreshold - goodPingThreshold)
+            return interpolateColor(from: NSColor.systemCyan, to: NSColor.systemYellow, ratio: ratio)
+        }
+    }
+    
+    private func interpolateColor(from startColor: NSColor, to endColor: NSColor, ratio: Double) -> NSColor {
+        let clampedRatio = max(0.0, min(1.0, ratio))
+        
+        // Convert colors to RGB components
+        guard let startRGB = startColor.usingColorSpace(.deviceRGB),
+              let endRGB = endColor.usingColorSpace(.deviceRGB) else {
+            return startColor
+        }
+        
+        let red = startRGB.redComponent + (endRGB.redComponent - startRGB.redComponent) * clampedRatio
+        let green = startRGB.greenComponent + (endRGB.greenComponent - startRGB.greenComponent) * clampedRatio
+        let blue = startRGB.blueComponent + (endRGB.blueComponent - startRGB.blueComponent) * clampedRatio
+        let alpha = startRGB.alphaComponent + (endRGB.alphaComponent - startRGB.alphaComponent) * clampedRatio
+        
+        return NSColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+    
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         
@@ -354,18 +396,55 @@ class MiniPingGraphView: NSView {
                 height: barHeight
             )
             
-            let barColor: NSColor
-            if ping == 0 {
-                barColor = .systemRed
-            } else if ping > 100 {
-                barColor = .systemYellow
-            } else {
-                barColor = NSColor(red: 40/255.0, green: 240/255.0, blue: 240/255.0, alpha: 1.0)
-            }
-            
-            barColor.setFill()
-            barRect.fill()
+            // Draw gradient bar
+            drawGradientBar(in: barRect, for: ping)
         }
+    }
+    
+    private func drawGradientBar(in rect: NSRect, for ping: Int) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        
+        // For failed pings, just draw a solid red bar
+        if ping <= 0 {
+            NSColor.systemRed.setFill()
+            rect.fill()
+            return
+        }
+        
+        // Create gradient colors
+        let bottomColor = NSColor.systemCyan  // Always start with cyan at bottom
+        let topColor = colorForPing(ping)     // Top color based on ping value
+        
+        // Get CGColors directly (they are not optional)
+        let bottomCGColor = bottomColor.cgColor
+        let topCGColor = topColor.cgColor
+        
+        // Create gradient
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colors = [bottomCGColor, topCGColor] as CFArray
+        let locations: [CGFloat] = [0.0, 1.0]
+        
+        guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: locations) else {
+            // Fallback to solid color if gradient creation fails
+            topColor.setFill()
+            rect.fill()
+            return
+        }
+        
+        // Save context state
+        context.saveGState()
+        
+        // Clip to bar rectangle
+        context.clip(to: rect)
+        
+        // Draw gradient from bottom to top
+        let startPoint = CGPoint(x: rect.midX, y: rect.minY)  // Bottom of bar
+        let endPoint = CGPoint(x: rect.midX, y: rect.maxY)    // Top of bar
+        
+        context.drawLinearGradient(gradient, start: startPoint, end: endPoint, options: [])
+        
+        // Restore context state
+        context.restoreGState()
     }
 }
 

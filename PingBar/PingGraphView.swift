@@ -53,11 +53,52 @@ class PingGraphView: NSView {
         }
     }
     
+    private func colorForPing(_ ping: Int) -> NSColor {
+        // Define thresholds for ping quality
+        let goodPingThreshold: Double = 20   // <= 20ms is excellent (cyan)
+        let badPingThreshold: Double = 100   // >= 100ms is poor (yellow)
+        
+        if ping <= 0 {
+            // Failed ping - use red
+            return NSColor.systemRed
+        }
+        
+        let pingValue = Double(ping)
+        
+        if pingValue <= goodPingThreshold {
+            // Excellent ping - cyan
+            return NSColor.systemCyan
+        } else if pingValue >= badPingThreshold {
+            // Poor ping - yellow
+            return NSColor.systemYellow
+        } else {
+            // Interpolate between cyan and yellow
+            let ratio = (pingValue - goodPingThreshold) / (badPingThreshold - goodPingThreshold)
+            return interpolateColor(from: NSColor.systemCyan, to: NSColor.systemYellow, ratio: ratio)
+        }
+    }
+    
+    private func interpolateColor(from startColor: NSColor, to endColor: NSColor, ratio: Double) -> NSColor {
+        let clampedRatio = max(0.0, min(1.0, ratio))
+        
+        // Convert colors to RGB components
+        guard let startRGB = startColor.usingColorSpace(.deviceRGB),
+              let endRGB = endColor.usingColorSpace(.deviceRGB) else {
+            return startColor
+        }
+        
+        let red = startRGB.redComponent + (endRGB.redComponent - startRGB.redComponent) * clampedRatio
+        let green = startRGB.greenComponent + (endRGB.greenComponent - startRGB.greenComponent) * clampedRatio
+        let blue = startRGB.blueComponent + (endRGB.blueComponent - startRGB.blueComponent) * clampedRatio
+        let alpha = startRGB.alphaComponent + (endRGB.alphaComponent - startRGB.alphaComponent) * clampedRatio
+        
+        return NSColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+    
     private func drawLineGraph(for host: HostData, in graphRect: NSRect, pointWidth: CGFloat) {
         guard host.pingHistory.count > 1 else { return }
         
-        let path = NSBezierPath()
-        var hasValidPoints = false
+        var previousPoint: NSPoint?
         
         for (index, ping) in host.pingHistory.enumerated() {
             let x = graphRect.minX + CGFloat(index) * pointWidth
@@ -69,31 +110,26 @@ class PingGraphView: NSView {
                 let maxLogValue = Foundation.log10(201.0) // log10(200 + 1) for max scale
                 let normalizedHeight = CGFloat(logValue / maxLogValue)
                 y = graphRect.minY + normalizedHeight * graphRect.height
-                
-                if !hasValidPoints {
-                    path.move(to: NSPoint(x: x, y: y))
-                    hasValidPoints = true
-                } else {
-                    path.line(to: NSPoint(x: x, y: y))
-                }
             } else {
                 // For failed pings (0), draw at the bottom of the graph
                 y = graphRect.minY
-                
-                if !hasValidPoints {
-                    path.move(to: NSPoint(x: x, y: y))
-                    hasValidPoints = true
-                } else {
-                    path.line(to: NSPoint(x: x, y: y))
-                }
             }
-        }
-        
-        if hasValidPoints {
-            // Set the line color based on host color
-            host.color.setStroke()
-            path.lineWidth = 1.5
-            path.stroke()
+            
+            let currentPoint = NSPoint(x: x, y: y)
+            
+            if let prevPoint = previousPoint {
+                // Draw line segment with color based on current ping value
+                let path = NSBezierPath()
+                path.move(to: prevPoint)
+                path.line(to: currentPoint)
+                
+                // Set color based on ping value
+                colorForPing(ping).setStroke()
+                path.lineWidth = 1.5
+                path.stroke()
+            }
+            
+            previousPoint = currentPoint
         }
     }
 }
