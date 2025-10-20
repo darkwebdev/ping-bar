@@ -74,8 +74,6 @@ public enum PingError: Error, Equatable {
     case socketOptionsSetError(err: Int32)
 }
 
-// MARK: SwiftyPing
-
 /// Class representing socket info, which contains a `SwiftyPing` instance and the identifier.
 public class SocketInfo {
     public weak var pinger: SwiftyPing?
@@ -139,7 +137,6 @@ public class SwiftyPing: NSObject {
         }
 
     }
-    // MARK: - Initialization
     /// Ping host
     public let destination: Destination
     /// Ping configuration

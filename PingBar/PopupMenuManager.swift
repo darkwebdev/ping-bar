@@ -1,12 +1,12 @@
 import Cocoa
+import Darwin
 
-// MARK: - Custom Menu Item View
 class HostMenuItemView: NSView {
     private let statusIndicator: NSView
     private let removeButton: NSButton
     private let hostLabel: NSTextField
     private let pingLabel: NSTextField
-    let miniGraphView: MiniPingGraphView
+    let graphView: PopupMenuPingGraphView
     var host: HostData
     private var trackingArea: NSTrackingArea?
     weak var delegate: PopupMenuDelegate?
@@ -19,13 +19,12 @@ class HostMenuItemView: NSView {
     // Calculate dynamic graph width based on max history setting
     static func calculateGraphWidth(for maxHistory: Int) -> CGFloat {
         let barWidth: CGFloat = 2.0
-        let barSpacing: CGFloat = 1.0
-        let totalBarWidth = barWidth + barSpacing
+        let leftPadding: CGFloat = 4.0
         let minWidth: CGFloat = 60 // Minimum width for small history values
         let maxWidth: CGFloat = 300 // Maximum width to prevent menu from becoming too wide
         
-        // Calculate width needed for maxHistory bars plus padding
-        let calculatedWidth = CGFloat(maxHistory) * totalBarWidth - barSpacing + 8 // +8 for padding
+        // Calculate width needed for maxHistory bars with only left padding (no right padding)
+        let calculatedWidth = leftPadding + (CGFloat(maxHistory) * barWidth)
         
         // Clamp between min and max values
         return max(minWidth, min(maxWidth, calculatedWidth))
@@ -37,7 +36,7 @@ class HostMenuItemView: NSView {
         self.removeButton = NSButton()
         self.hostLabel = NSTextField()
         self.pingLabel = NSTextField()
-        self.miniGraphView = MiniPingGraphView(hostData: host)
+        self.graphView = PopupMenuPingGraphView(hostData: host)
         
         // Set the hostname first so we can calculate proper width
         hostLabel.stringValue = host.host
@@ -126,8 +125,8 @@ class HostMenuItemView: NSView {
         addSubview(pingLabel)
         
         // Mini graph
-        miniGraphView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(miniGraphView)
+        graphView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(graphView)
         
         // Calculate dynamic layout values based on the MAXIMUM hostname width
         let statusAreaWidth: CGFloat = 12 + 8 + 8 // 28 total
@@ -166,10 +165,10 @@ class HostMenuItemView: NSView {
             pingLabel.widthAnchor.constraint(equalToConstant: effectiveMaxWidth),
             
             // Mini graph - positioned with guaranteed separation from hostname area
-            miniGraphView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: graphStartPosition),
-            miniGraphView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            miniGraphView.widthAnchor.constraint(equalToConstant: graphWidth),
-            miniGraphView.heightAnchor.constraint(equalToConstant: 22),
+            graphView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: graphStartPosition),
+            graphView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            graphView.widthAnchor.constraint(equalToConstant: graphWidth),
+            graphView.heightAnchor.constraint(equalToConstant: 22),
             
             // Overall height
             heightAnchor.constraint(equalToConstant: 38)
@@ -241,7 +240,7 @@ class HostMenuItemView: NSView {
         }
         
         statusIndicator.layer?.backgroundColor = statusColor.cgColor
-        miniGraphView.updateData()
+        graphView.updateData()
     }
     
     func updateWithNewData(_ newHost: HostData) {
@@ -249,7 +248,7 @@ class HostMenuItemView: NSView {
             guard let self = self else { return }
             
             self.host = newHost
-            self.miniGraphView.updateHostData(newHost)
+            self.graphView.updateHostData(newHost)
             self.updateContent()
             
             self.needsDisplay = true
@@ -260,191 +259,6 @@ class HostMenuItemView: NSView {
     @objc private func removeButtonClicked() {
         let hostToRemove = host.host
         delegate?.removeHost(hostToRemove)
-    }
-}
-
-// MARK: - Mini Ping Graph View
-class MiniPingGraphView: NSView {
-    private var hostData: HostData
-    private var maxHistory: Int = 50
-    
-    init(hostData: HostData) {
-        self.hostData = hostData
-        super.init(frame: .zero)
-        self.wantsLayer = true
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    func updateData() {
-        needsDisplay = true
-    }
-    
-    func updateHostData(_ newHostData: HostData) {
-        self.hostData = newHostData
-        needsDisplay = true
-    }
-    
-    func updateMaxHistory(_ newMaxHistory: Int) {
-        self.maxHistory = newMaxHistory
-        needsDisplay = true
-    }
-    
-    private func colorForPing(_ ping: Int) -> NSColor {
-        // Define thresholds for ping quality
-        let goodPingThreshold: Double = 20   // <= 20ms is excellent (cyan)
-        let badPingThreshold: Double = 100   // >= 100ms is poor (yellow)
-        
-        if ping <= 0 {
-            // Failed ping - use red
-            return NSColor.systemRed
-        }
-        
-        let pingValue = Double(ping)
-        
-        if pingValue <= goodPingThreshold {
-            // Excellent ping - cyan
-            return NSColor.systemCyan
-        } else if pingValue >= badPingThreshold {
-            // Poor ping - yellow
-            return NSColor.systemYellow
-        } else {
-            // Interpolate between cyan and yellow
-            let ratio = (pingValue - goodPingThreshold) / (badPingThreshold - goodPingThreshold)
-            return interpolateColor(from: NSColor.systemCyan, to: NSColor.systemYellow, ratio: ratio)
-        }
-    }
-    
-    private func interpolateColor(from startColor: NSColor, to endColor: NSColor, ratio: Double) -> NSColor {
-        let clampedRatio = max(0.0, min(1.0, ratio))
-        
-        // Convert colors to RGB components
-        guard let startRGB = startColor.usingColorSpace(.deviceRGB),
-              let endRGB = endColor.usingColorSpace(.deviceRGB) else {
-            return startColor
-        }
-        
-        let red = startRGB.redComponent + (endRGB.redComponent - startRGB.redComponent) * clampedRatio
-        let green = startRGB.greenComponent + (endRGB.greenComponent - startRGB.greenComponent) * clampedRatio
-        let blue = startRGB.blueComponent + (endRGB.blueComponent - startRGB.blueComponent) * clampedRatio
-        let alpha = startRGB.alphaComponent + (endRGB.alphaComponent - startRGB.alphaComponent) * clampedRatio
-        
-        return NSColor(red: red, green: green, blue: blue, alpha: alpha)
-    }
-    
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        
-        // Clear background
-        NSColor.clear.setFill()
-        bounds.fill()
-        
-        // Check if there's an error
-        if hostData.currentPing == 0 && hostData.errorMessage != nil {
-            let errorText = hostData.errorMessage ?? "Error"
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8),
-                .foregroundColor: NSColor.systemRed
-            ]
-            
-            let attributedString = NSAttributedString(string: errorText, attributes: attributes)
-            let textRect = NSRect(
-                x: bounds.minX,
-                y: bounds.minY + 1,
-                width: bounds.width,
-                height: bounds.height - 2
-            )
-            
-            let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
-            attributedString.draw(with: textRect, options: options, context: nil)
-            return
-        }
-        
-        guard !hostData.pingHistory.isEmpty else { return }
-        
-        let maxHistoryToShow = min(hostData.pingHistory.count, maxHistory)
-        let graphRect = bounds.insetBy(dx: 1, dy: 1)
-        let history = Array(hostData.pingHistory.suffix(maxHistoryToShow))
-        
-        guard !history.isEmpty else { return }
-        
-        let barWidth: CGFloat = 2.0
-        let barSpacing: CGFloat = 1.0
-        let totalBarWidth = barWidth + barSpacing
-        let maxPing = history.filter { $0 > 0 }.max() ?? 100
-        
-        let totalGraphWidth = CGFloat(history.count) * totalBarWidth - barSpacing
-        let startX = graphRect.maxX - totalGraphWidth
-        
-        for (index, ping) in history.enumerated() {
-            let x = startX + CGFloat(index) * totalBarWidth
-            let barHeight: CGFloat
-            
-            if ping > 0 {
-                let normalizedHeight = CGFloat(ping) / CGFloat(maxPing)
-                barHeight = normalizedHeight * graphRect.height
-            } else {
-                barHeight = 2
-            }
-            
-            let barRect = NSRect(
-                x: x,
-                y: graphRect.minY,
-                width: barWidth,
-                height: barHeight
-            )
-            
-            // Draw gradient bar
-            drawGradientBar(in: barRect, for: ping)
-        }
-    }
-    
-    private func drawGradientBar(in rect: NSRect, for ping: Int) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        
-        // For failed pings, just draw a solid red bar
-        if ping <= 0 {
-            NSColor.systemRed.setFill()
-            rect.fill()
-            return
-        }
-        
-        // Create gradient colors
-        let bottomColor = NSColor.systemCyan  // Always start with cyan at bottom
-        let topColor = colorForPing(ping)     // Top color based on ping value
-        
-        // Get CGColors directly (they are not optional)
-        let bottomCGColor = bottomColor.cgColor
-        let topCGColor = topColor.cgColor
-        
-        // Create gradient
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let colors = [bottomCGColor, topCGColor] as CFArray
-        let locations: [CGFloat] = [0.0, 1.0]
-        
-        guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: locations) else {
-            // Fallback to solid color if gradient creation fails
-            topColor.setFill()
-            rect.fill()
-            return
-        }
-        
-        // Save context state
-        context.saveGState()
-        
-        // Clip to bar rectangle
-        context.clip(to: rect)
-        
-        // Draw gradient from bottom to top
-        let startPoint = CGPoint(x: rect.midX, y: rect.minY)  // Bottom of bar
-        let endPoint = CGPoint(x: rect.midX, y: rect.maxY)    // Top of bar
-        
-        context.drawLinearGradient(gradient, start: startPoint, end: endPoint, options: [])
-        
-        // Restore context state
-        context.restoreGState()
     }
 }
 
@@ -533,7 +347,6 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
             let hostView = HostMenuItemView(host: host)
             hostView.delegate = self.delegate
             hostView.menuManager = self
-            hostView.miniGraphView.updateMaxHistory(self.maxHistory)
             hostItem.view = hostView
             hostItem.isEnabled = false
             menu.addItem(hostItem)
@@ -610,6 +423,21 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         historyItem.submenu = historySubmenu
         menu.addItem(historyItem)
         
+        // Network Settings item
+        let dnsItem = NSMenuItem(title: "Network Settings...", action: #selector(openNetworkSettings), keyEquivalent: "")
+        dnsItem.target = self
+        menu.addItem(dnsItem)
+        
+        // Add Google DNS item
+        let addDNSItem = NSMenuItem(title: "Add 8.8.8.8 to DNS list", action: #selector(addGoogleDNS), keyEquivalent: "")
+        addDNSItem.target = self
+        menu.addItem(addDNSItem)
+        
+        // Remove DNS item
+        let removeDNSItem = NSMenuItem(title: "Remove DNS servers", action: #selector(removeGoogleDNS), keyEquivalent: "")
+        removeDNSItem.target = self
+        menu.addItem(removeDNSItem)
+        
         menu.addItem(NSMenuItem.separator())
     }
     
@@ -635,6 +463,7 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
         textField.placeholderString = "e.g., google.com"
         alert.accessoryView = textField
+        textField.becomeFirstResponder()
         
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
@@ -658,11 +487,6 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         // Update the static currentMaxHistory so all views use the new setting
         HostMenuItemView.currentMaxHistory = history
         
-        // Update all existing host views with the new max history
-        for hostView in hostMenuViews.values {
-            hostView.miniGraphView.updateMaxHistory(history)
-        }
-        
         delegate?.updateMaxHistory(history)
     }
     
@@ -672,5 +496,102 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     
     @objc private func quitApp() {
         delegate?.quitApp()
+    }
+    
+    @objc private func openNetworkSettings() {
+        // Open the Network pane in System Preferences
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/PreferencePanes/Network.prefPane"))
+    }
+    
+    @objc private func addGoogleDNS() {
+        // First, get the Wi-Fi service name
+        let getServiceScriptSource = """
+        do shell script "networksetup -listallnetworkservices | grep -i 'Wi-Fi' | head -1"
+        """
+        let getServiceScript = NSAppleScript(source: getServiceScriptSource)
+        var serviceError: NSDictionary?
+        let serviceResult = getServiceScript?.executeAndReturnError(&serviceError)
+        
+        guard let serviceName = serviceResult?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !serviceName.isEmpty else {
+            showError("Failed to detect Wi-Fi service. Please ensure Wi-Fi is enabled and try again.")
+            return
+        }
+        
+        // Execute the command with privileges
+        let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" 8.8.8.8\" with administrator privileges"
+        let setDNSScript = NSAppleScript(source: setDNSScriptSource)
+        var setError: NSDictionary?
+        let setResult = setDNSScript?.executeAndReturnError(&setError)
+        if let setError = setError {
+            showError("Failed to add DNS server: \(setError.description)")
+        } else {
+            showSuccess("Added 8.8.8.8 to DNS list.")
+        }
+    }
+    
+    @objc private func removeGoogleDNS() {
+        // First, get the Wi-Fi service name
+        let getServiceScriptSource = """
+        do shell script "networksetup -listallnetworkservices | grep -i 'Wi-Fi' | head -1"
+        """
+        let getServiceScript = NSAppleScript(source: getServiceScriptSource)
+        var serviceError: NSDictionary?
+        let serviceResult = getServiceScript?.executeAndReturnError(&serviceError)
+        
+        guard let serviceName = serviceResult?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !serviceName.isEmpty else {
+            showError("Failed to detect Wi-Fi service. Please ensure Wi-Fi is enabled and try again.")
+            return
+        }
+        
+        // Execute the command with privileges
+        let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" empty\" with administrator privileges"
+        let setDNSScript = NSAppleScript(source: setDNSScriptSource)
+        var setError: NSDictionary?
+        let setResult = setDNSScript?.executeAndReturnError(&setError)
+        if let setError = setError {
+            showError("Failed to remove DNS servers: \(setError.description)")
+        } else {
+            showSuccess("Removed DNS servers.")
+        }
+    }
+    
+    private func isUserAdmin() -> Bool {
+        guard let adminGroup = getgrnam("admin") else { return false }
+        let userName = NSUserName()
+        guard let members = adminGroup.pointee.gr_mem else { return false }
+        var i = 0
+        while let member = members[i] {
+            if String(cString: member) == userName {
+                return true
+            }
+            i += 1
+        }
+        return false
+    }
+    
+    private func showError(_ message: String) {
+        showAlert(title: "Error", message: message, informativeText: nil)
+    }
+    
+    private func showSuccess(_ message: String) {
+        showAlert(title: "Success", message: message, informativeText: nil)
+    }
+    
+    private func showInfo(_ message: String) {
+        showAlert(title: "Info", message: message, informativeText: nil)
+    }
+    
+    private func showAlert(title: String, message: String, informativeText: String?) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        
+        if let informativeText = informativeText {
+            alert.informativeText = informativeText
+        }
+        
+        alert.runModal()
     }
 }

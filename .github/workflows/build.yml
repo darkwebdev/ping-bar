@@ -1,0 +1,66 @@
+name: Build PingBar
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Select Xcode version
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Show Xcode version
+      run: xcode-select -p
+
+    - name: Build app
+      run: |
+        xcodebuild \
+          -project PingBar.xcodeproj \
+          -scheme PingBar \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          clean build
+
+    - name: Run tests
+      run: |
+        xcodebuild \
+          -project PingBar.xcodeproj \
+          -scheme PingBar \
+          -configuration Debug \
+          -destination 'platform=macOS' \
+          test
+
+    - name: Archive app
+      run: |
+        xcodebuild \
+          -project PingBar.xcodeproj \
+          -scheme PingBar \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          -archivePath build/PingBar.xcarchive \
+          archive
+
+    - name: Export app
+      run: |
+        xcodebuild \
+          -exportArchive \
+          -archivePath build/PingBar.xcarchive \
+          -exportPath build/export \
+          -exportOptionsPlist exportOptions.plist
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: PingBar-${{ github.sha }}
+        path: build/export/PingBar.app
+        retention-days: 30

@@ -123,57 +123,69 @@ class PingManager: NSObject {
             return
         }
         
-        var errorReported = false
-        
-        do {
-            currentPinger = try SwiftyPing(
-                host: pingHost,
-                configuration: PingConfiguration(interval: 0.5, with: 1),
-                queue: DispatchQueue.global()
-            )
-        } catch {
-            errorReported = true
-            let friendlyError = userFriendlyErrorMessage(from: error)
-            print("Failed to ping host '\(pingHost)': \(error)")
-            DispatchQueue.main.async {
-                self.delegate?.pingManager(self, didFailWithError: friendlyError)
-            }
-            return
-        }
-        
-        var responseReceived = false
-        
-        currentPinger?.observer = { [weak self] (response) in
+        // Move DNS-sensitive operations to background queue to prevent UI blocking
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
-            responseReceived = true
-            let roundedDuration = ceil(response.duration * 1000)
-            let pingResult = Int(roundedDuration)
-            print("Ping to \(self.pingHost): \(pingResult)ms")
             
-            DispatchQueue.main.async {
-                self.delegate?.pingManager(self, didReceivePingResult: pingResult)
+            var errorReported = false
+            var currentPinger: SwiftyPing?
+            
+            do {
+                // DNS lookup and SwiftyPing initialization happens here - now on background thread
+                currentPinger = try SwiftyPing(
+                    host: self.pingHost,
+                    configuration: PingConfiguration(interval: 0.5, with: 1),
+                    queue: DispatchQueue.global()
+                )
+            } catch {
+                errorReported = true
+                let friendlyError = self.userFriendlyErrorMessage(from: error)
+                print("Failed to ping host '\(self.pingHost)': \(error)")
+                DispatchQueue.main.async {
+                    self.delegate?.pingManager(self, didFailWithError: friendlyError)
+                }
+                return
             }
-        }
-        
-        currentPinger?.targetCount = 1
-        
-        do {
-            try currentPinger?.startPinging()
-        } catch {
-            errorReported = true
-            let friendlyError = userFriendlyErrorMessage(from: error)
-            print("Failed to start pinging to '\(pingHost)': \(error)")
+            
+            // Store the pinger reference on main queue to ensure thread safety
             DispatchQueue.main.async {
-                self.delegate?.pingManager(self, didFailWithError: friendlyError)
+                self.currentPinger = currentPinger
             }
-            return
-        }
-        
-        // Handle timeout after 2 seconds - only if no other error was reported
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            if !responseReceived && !errorReported {
-                print("Ping timeout - no response from \(self.pingHost)")
-                self.delegate?.pingManager(self, didFailWithError: "Timeout - no response from \(self.pingHost)")
+            
+            var responseReceived = false
+            
+            currentPinger?.observer = { [weak self] (response) in
+                guard let self = self else { return }
+                responseReceived = true
+                let roundedDuration = ceil(response.duration * 1000)
+                let pingResult = Int(roundedDuration)
+                print("Ping to \(self.pingHost): \(pingResult)ms")
+                
+                DispatchQueue.main.async {
+                    self.delegate?.pingManager(self, didReceivePingResult: pingResult)
+                }
+            }
+            
+            currentPinger?.targetCount = 1
+            
+            do {
+                try currentPinger?.startPinging()
+            } catch {
+                errorReported = true
+                let friendlyError = self.userFriendlyErrorMessage(from: error)
+                print("Failed to start pinging to '\(self.pingHost)': \(error)")
+                DispatchQueue.main.async {
+                    self.delegate?.pingManager(self, didFailWithError: friendlyError)
+                }
+                return
+            }
+            
+            // Handle timeout after 2 seconds - only if no other error was reported
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if !responseReceived && !errorReported {
+                    print("Ping timeout - no response from \(self.pingHost)")
+                    self.delegate?.pingManager(self, didFailWithError: "Timeout - no response from \(self.pingHost)")
+                }
             }
         }
     }
