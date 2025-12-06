@@ -59,8 +59,9 @@ class PingGraphView: NSView {
         let badPingThreshold: Double = 100   // >= 100ms is poor (yellow)
         
         if ping <= 0 {
-            // Failed ping - use red
-            return NSColor.systemRed
+            // Unknown/failed ping that's not necessarily offline — draw neutral gray.
+            // The permanent offline state is shown by the offline indicator (red dot).
+            return NSColor.systemGray
         }
         
         let pingValue = Double(ping)

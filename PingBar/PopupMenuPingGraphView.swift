@@ -43,7 +43,8 @@ class PopupMenuPingGraphView: NSView {
     // Add gradient color calculation method
     private func colorForPing(_ ping: Int) -> NSColor {
         if ping == 0 {
-            return NSColor.systemRed // Failed ping
+            // Unknown/failed ping — show neutral gray. Permanent offline is indicated by the red dot in the menu.
+            return NSColor.systemGray
         } else if ping <= 20 {
             return NSColor.systemCyan // Good ping
         } else if ping >= 100 {
@@ -112,9 +113,9 @@ class PopupMenuPingGraphView: NSView {
             guard x + barWidth <= graphRect.maxX else { break }
             
             if ping == 0 {
-                // Failed ping - draw solid red bar
+                // Unknown/failed ping - draw neutral gray bar (offline dot indicates permanent offline)
                 let barRect = NSRect(x: x, y: graphRect.minY, width: barWidth, height: graphRect.height)
-                NSColor.systemRed.setFill()
+                NSColor.systemGray.setFill()
                 barRect.fill()
             } else {
                 // Calculate bar height based on ping value

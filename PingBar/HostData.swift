@@ -5,6 +5,8 @@ struct HostData {
     var pingHistory: [Int]
     var currentPing: Int
     var errorMessage: String?
+    var isOffline: Bool
+    var hasHadSuccessfulPing: Bool
     let color: NSColor
     
     init(host: String, color: NSColor) {
@@ -13,6 +15,8 @@ struct HostData {
         self.currentPing = 0
         self.errorMessage = nil
         self.color = color
+        self.isOffline = false
+        self.hasHadSuccessfulPing = false
     }
 }
 
@@ -93,6 +97,9 @@ class MultiHostPingManager {
         for (host, var hostData) in hosts {
             hostData.pingHistory.removeAll()
             hostData.currentPing = 0
+            hostData.errorMessage = nil
+            hostData.isOffline = false
+            hostData.hasHadSuccessfulPing = false
             hosts[host] = hostData
         }
         delegate?.multiHostPingManager(self, didUpdateHosts: Array(hosts.values))
@@ -123,21 +130,19 @@ extension MultiHostPingManager: PingManagerDelegate {
     
     private func updateHostData(hostName: String, pingResult: Int, errorMessage: String?) {
         guard var hostData = hosts[hostName] else { return }
-        
-        // Update current ping and error message
         hostData.currentPing = pingResult
         hostData.errorMessage = errorMessage
-        
-        // Add to history (limit to maxHistory)
+        if pingResult > 0 && errorMessage == nil {
+            hostData.hasHadSuccessfulPing = true
+            hostData.isOffline = false
+        } else if errorMessage != nil {
+            hostData.isOffline = true
+        }
         hostData.pingHistory.append(pingResult)
         if hostData.pingHistory.count > maxHistory {
             hostData.pingHistory.removeFirst()
         }
-        
-        // Update the host data
         hosts[hostName] = hostData
-        
-        // Notify delegate about the update (this triggers popup menu updates)
         delegate?.multiHostPingManager(self, didUpdateHosts: Array(hosts.values))
     }
 }

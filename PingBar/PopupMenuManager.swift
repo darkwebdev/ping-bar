@@ -228,16 +228,29 @@ class HostMenuItemView: NSView {
         
         // Update status indicator color based on ping status
         let statusColor: NSColor
-        if host.currentPing == 0 {
+        // If we have a recent successful ping, show it immediately regardless of previous offline state
+        if host.currentPing > 0 {
+            if host.currentPing > 100 {
+                statusColor = .systemYellow
+            } else {
+                statusColor = .systemGreen
+            }
+            pingLabel.stringValue = "\(host.currentPing)ms"
+        } else if host.isOffline && host.hasHadSuccessfulPing {
+            // Only show permanent offline (red) if we've previously seen a successful ping
             statusColor = .systemRed
             pingLabel.stringValue = "-"
-        } else if host.currentPing > 100 {
+        } else if host.currentPing == 0 {
+             // Unknown, transient failures or no data yet
+             statusColor = .systemGray
+             pingLabel.stringValue = "-"
+         } else if host.currentPing > 100 {
             statusColor = .systemYellow
             pingLabel.stringValue = "\(host.currentPing)ms"
-        } else {
-            statusColor = .systemGreen
+         } else {
+             statusColor = .systemGreen
             pingLabel.stringValue = "\(host.currentPing)ms"
-        }
+         }
         
         statusIndicator.layer?.backgroundColor = statusColor.cgColor
         graphView.updateData()
