@@ -1,0 +1,50 @@
+name: PingBar CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace PingBar.xcodeproj/project.xcworkspace \
+            -scheme PingBar \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            clean test
+
+      - name: Build release artifacts
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project PingBar.xcodeproj \
+            -scheme PingBar \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            CONFIGURATION_BUILD_DIR=$PWD/build/Release \
+            clean build
+
+      - name: Upload PingBar.app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PingBar-macOS
+          path: build/Release/PingBar.app
