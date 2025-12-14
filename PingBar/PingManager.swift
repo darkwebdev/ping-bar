@@ -145,7 +145,19 @@ class PingManager: NSObject {
 
         pinger?.observer = { [weak self] response in
             guard let self = self else { return }
+            self.log("[OBSERVER CALLBACK] received for \(host), error: \(String(describing: response.error))")
             responseReceived = true
+
+            // Check if there was an error in the response
+            if let error = response.error {
+                errorReported = true
+                self.log("[OBSERVER ERROR] \(host) error: \(error)")
+                let friendly = self.userFriendlyErrorMessage(from: error)
+                DispatchQueue.main.async { self.delegate?.pingManager(self, didFailWithError: friendly) }
+                self.recordFailure()
+                return
+            }
+
             let roundedDuration = ceil(response.duration * 1000)
             let pingResult = Int(roundedDuration)
             self.recordSuccess()
@@ -212,6 +224,31 @@ class PingManager: NSObject {
 
     // Function to convert cryptic error messages to user-friendly ones
     private func userFriendlyErrorMessage(from error: Error) -> String {
+        // Check if it's a PingError first
+        if let pingError = error as? PingError {
+            switch pingError {
+            case .responseTimeout:
+                return "Ping timeout for '\(pingHost)' (no response within timeout period)"
+            case .requestTimeout:
+                return "Request timeout for '\(pingHost)' (failed to send ping request)"
+            case .requestError:
+                return "Request error for '\(pingHost)' (failed to send ping packet)"
+            case .addressLookupError:
+                return "Host '\(pingHost)' could not be resolved (DNS lookup failed)"
+            case .dnsTimeout:
+                return "DNS resolution timed out for '\(pingHost)' (DNS server unresponsive)"
+            case .hostNotFound:
+                return "Host '\(pingHost)' not found"
+            case .unknownHostError:
+                return "Unknown host '\(pingHost)'"
+            case .socketOptionsSetError(let err):
+                return "Socket configuration error for '\(pingHost)' (error code: \(err))"
+            default:
+                return "Ping error for '\(pingHost)': \(error.localizedDescription)"
+            }
+        }
+
+        // Fallback to string matching for other error types
         let errorString = error.localizedDescription.lowercased()
         if errorString.contains("error 8") || errorString.contains("nodename nor servname provided") { return "Host '\(pingHost)' could not be resolved (invalid hostname)" }
         if errorString.contains("error 9") || errorString.contains("address family not supported") { return "Host '\(pingHost)' could not be resolved (DNS lookup failed)" }
@@ -222,6 +259,7 @@ class PingManager: NSObject {
         if errorString.contains("host is down") { return "Host '\(pingHost)' is down or unreachable" }
         if errorString.contains("no route to host") { return "No route to host '\(pingHost)'" }
         if errorString.contains("connection refused") { return "Connection refused by host '\(pingHost)'" }
+        if errorString.contains("dnstimeout") { return "DNS resolution timed out for '\(pingHost)' (DNS server unresponsive)" }
         if errorString.contains("addresslookuperror") { return "Host '\(pingHost)' could not be resolved (DNS lookup failed)" }
         if errorString.contains("hostnotfound") { return "Host '\(pingHost)' not found" }
         if errorString.contains("unknownhosterror") { return "Unknown host '\(pingHost)'" }

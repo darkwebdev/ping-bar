@@ -46,6 +46,8 @@ public enum PingError: Error, Equatable {
     case unknownHostError
     /// Address lookup failed.
     case addressLookupError
+    /// DNS resolution timed out.
+    case dnsTimeout
     /// Host was not found.
     case hostNotFound
     /// Address data could not be converted to `sockaddr`.
@@ -74,11 +76,58 @@ public enum PingError: Error, Equatable {
     case socketOptionsSetError(err: Int32)
 }
 
+/// DNS cache to avoid repeated blocking DNS lookups
+private class DNSCache {
+    static let shared = DNSCache()
+
+    private struct CachedEntry {
+        let address: Data
+        let timestamp: Date
+    }
+
+    private var cache: [String: CachedEntry] = [:]
+    private let cacheQueue = DispatchQueue(label: "DNSCache.queue", attributes: .concurrent)
+    private let cacheTimeout: TimeInterval = 300 // 5 minutes
+
+    private init() {}
+
+    func getAddress(for host: String) -> Data? {
+        return cacheQueue.sync {
+            guard let entry = cache[host] else { return nil }
+
+            // Check if cache entry is still valid
+            if Date().timeIntervalSince(entry.timestamp) > cacheTimeout {
+                return nil
+            }
+
+            return entry.address
+        }
+    }
+
+    func setAddress(_ address: Data, for host: String) {
+        cacheQueue.async(flags: .barrier) {
+            self.cache[host] = CachedEntry(address: address, timestamp: Date())
+        }
+    }
+
+    func clearCache() {
+        cacheQueue.async(flags: .barrier) {
+            self.cache.removeAll()
+        }
+    }
+
+    func invalidate(host: String) {
+        cacheQueue.async(flags: .barrier) {
+            self.cache.removeValue(forKey: host)
+        }
+    }
+}
+
 /// Class representing socket info, which contains a `SwiftyPing` instance and the identifier.
 public class SocketInfo {
     public weak var pinger: SwiftyPing?
     public let identifier: UInt16
-    
+
     public init(pinger: SwiftyPing, identifier: UInt16) {
         self.pinger = pinger
         self.identifier = identifier
@@ -100,13 +149,65 @@ public class SwiftyPing: NSObject {
             guard let address = socketAddress else { return nil }
             return String(cString: inet_ntoa(address.sin_addr), encoding: .ascii)
         }
-        
-        /// Resolves the `host`.
-        public static func getIPv4AddressFromHost(host: String) throws -> Data {
+
+        /// Resolves the `host` with timeout protection.
+        public static func getIPv4AddressFromHost(host: String, timeout: TimeInterval = 5.0) throws -> Data {
+            // First check the DNS cache
+            if let cached = DNSCache.shared.getAddress(for: host) {
+                print("[SwiftyPing] DNS cache HIT for \(host)")
+                return cached
+            }
+
+            print("[SwiftyPing] DNS cache MISS for \(host), performing resolution with \(timeout)s timeout")
+            let startTime = Date()
+
+            // Perform async DNS resolution with timeout
+            let semaphore = DispatchSemaphore(value: 0)
+            var resolvedData: Data?
+            var resolutionError: Error?
+
+            // Perform DNS resolution on background queue
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    resolvedData = try self.performDNSResolution(host: host)
+                } catch {
+                    resolutionError = error
+                }
+                semaphore.signal()
+            }
+
+            // Wait with timeout
+            let result = semaphore.wait(timeout: .now() + timeout)
+            let elapsedTime = Date().timeIntervalSince(startTime)
+
+            if result == .timedOut {
+                print("[SwiftyPing] DNS resolution TIMED OUT for \(host) after \(String(format: "%.2f", elapsedTime))s")
+                throw PingError.dnsTimeout
+            }
+
+            if let error = resolutionError {
+                print("[SwiftyPing] DNS resolution FAILED for \(host): \(error)")
+                throw error
+            }
+
+            guard let data = resolvedData else {
+                print("[SwiftyPing] DNS resolution returned no data for \(host)")
+                throw PingError.unknownHostError
+            }
+
+            // Cache the successful result
+            DNSCache.shared.setAddress(data, for: host)
+            print("[SwiftyPing] DNS resolution SUCCESS for \(host) in \(String(format: "%.2f", elapsedTime))s, cached")
+
+            return data
+        }
+
+        /// Performs the actual DNS resolution (blocking call, should be wrapped with timeout).
+        private static func performDNSResolution(host: String) throws -> Data {
             var streamError = CFStreamError()
             let cfhost = CFHostCreateWithName(nil, host as CFString).takeRetainedValue()
             let status = CFHostStartInfoResolution(cfhost, .addresses, &streamError)
-            
+
             var data: Data?
             if !status {
                 if Int32(streamError.domain) == kCFStreamErrorDomainNetDB {
@@ -119,7 +220,7 @@ public class SwiftyPing: NSObject {
                 guard let addresses = CFHostGetAddressing(cfhost, &success)?.takeUnretainedValue() as? [Data] else {
                     throw PingError.hostNotFound
                 }
-                
+
                 for address in addresses {
                     let addrin = address.socketAddress
                     if address.count >= MemoryLayout<sockaddr>.size && addrin.sa_family == UInt8(AF_INET) {
@@ -127,7 +228,7 @@ public class SwiftyPing: NSObject {
                         break
                     }
                 }
-                
+
                 if data?.count == 0 || data == nil {
                     throw PingError.hostNotFound
                 }
@@ -169,6 +270,10 @@ public class SwiftyPing: NSObject {
     private var socketSource: CFRunLoopSource?
     /// An unmanaged instance of `SocketInfo` used in the current socket's callback. This must be released manually, otherwise it will leak.
     private var unmanagedSocketInfo: Unmanaged<SocketInfo>?
+    /// Background thread for socket operations to avoid blocking main RunLoop
+    private var socketThread: Thread?
+    /// Background RunLoop for socket operations
+    private var socketRunLoop: CFRunLoop?
     
     /// When the current request was sent.
     private var sequenceStart = Date()
@@ -276,15 +381,20 @@ public class SwiftyPing: NSObject {
             // ...and a socket...
             socket = CFSocketCreate(kCFAllocatorDefault, AF_INET, SOCK_DGRAM, IPPROTO_ICMP, CFSocketCallBackType.dataCallBack.rawValue, { socket, type, address, data, info in
                 // Socket callback closure
-                guard let socket = socket, let info = info, let data = data else { return }
+                print("[SwiftyPing] Socket callback triggered!")
+                guard let socket = socket, let info = info, let data = data else {
+                    print("[SwiftyPing] Socket callback - missing data")
+                    return
+                }
                 let socketInfo = Unmanaged<SocketInfo>.fromOpaque(info).takeUnretainedValue()
                 let ping = socketInfo.pinger
                 if (type as CFSocketCallBackType) == CFSocketCallBackType.dataCallBack {
+                    print("[SwiftyPing] Socket callback - data received for \(ping?.destination.host ?? "unknown")")
                     let cfdata = Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue()
                     ping?.socket(socket: socket, didReadData: cfdata as Data)
                 }
             }, &context)
-            
+
             // Disable SIGPIPE, see issue #15 on GitHub.
             let handle = CFSocketGetNative(socket)
             var value: Int32 = 1
@@ -292,7 +402,7 @@ public class SwiftyPing: NSObject {
             guard err == 0 else {
                 throw PingError.socketOptionsSetError(err: err)
             }
-            
+
             // Set TTL
             if var ttl = configuration.timeToLive {
                 let err = setsockopt(handle, IPPROTO_IP, IP_TTL, &ttl, socklen_t(MemoryLayout.size(ofValue: ttl)))
@@ -300,8 +410,8 @@ public class SwiftyPing: NSObject {
                     throw PingError.socketOptionsSetError(err: err)
                 }
             }
-            
-            // ...and add it to the main run loop.
+
+            // Add it to the main run loop - this is necessary for socket callbacks to work
             socketSource = CFSocketCreateRunLoopSource(nil, socket, 0)
             CFRunLoopAddSource(CFRunLoopGetMain(), socketSource, .commonModes)
         }
@@ -321,6 +431,8 @@ public class SwiftyPing: NSObject {
         unmanagedSocketInfo = nil
         timeoutTimer?.invalidate()
         timeoutTimer = nil
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
     }
     deinit {
         tearDown()
@@ -347,6 +459,16 @@ public class SwiftyPing: NSObject {
             _serial_property.sync { self._timeoutTimer = newValue }
         }
     }
+
+    private var _timeoutWorkItem: DispatchWorkItem?
+    private var timeoutWorkItem: DispatchWorkItem? {
+        get {
+            return _serial_property.sync { self._timeoutWorkItem }
+        }
+        set {
+            _serial_property.sync { self._timeoutWorkItem = newValue }
+        }
+    }
         
     private func sendPing() {
         if isPinging || killswitch {
@@ -354,10 +476,14 @@ public class SwiftyPing: NSObject {
         }
         isPinging = true
         sequenceStart = Date()
-        
-        let timer = Timer(timeInterval: self.configuration.timeoutInterval, target: self, selector: #selector(self.timeout), userInfo: nil, repeats: false)
-        RunLoop.main.add(timer, forMode: .common)
-        self.timeoutTimer = timer
+
+        // Use DispatchQueue timer instead of RunLoop timer to avoid main thread dependency
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            self?.timeout()
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + self.configuration.timeoutInterval, execute: timeoutWork)
+        // Store reference to cancel if needed (we'll convert timeoutTimer to DispatchWorkItem)
+        self.timeoutWorkItem = timeoutWork
 
         _serial.async {
             let address = self.destination.ipv4Address
@@ -440,7 +566,10 @@ public class SwiftyPing: NSObject {
     private func informObserver(of response: PingResponse) {
         responses.append(response)
         if killswitch { return }
+        print("[SwiftyPing] informObserver called for \(destination.host), error: \(String(describing: response.error))")
+        // Call observer synchronously but on the correct queue - this is important for the responseReceived flag in PingManager
         currentQueue.sync {
+            print("[SwiftyPing] observer callback executing for \(self.destination.host)")
             self.observer?(response)
             self.delegate?.didReceive(response: response)
         }
@@ -555,10 +684,10 @@ public class SwiftyPing: NSObject {
     // MARK: - Socket callback
     private func socket(socket: CFSocket, didReadData data: Data?) {
         if killswitch { return }
-        
+
         guard let data = data else { return }
         var validationError: PingError? = nil
-        
+
         do {
             let validation = try validateResponse(from: data)
             if !validation { return }
@@ -567,8 +696,10 @@ public class SwiftyPing: NSObject {
         } catch {
             print("Unhandled error thrown: \(error)")
         }
-        
+
+        // Cancel timeout
         timeoutTimer?.invalidate()
+        timeoutWorkItem?.cancel()
         var ipHeader: IPHeader? = nil
         if validationError == nil {
             ipHeader = data.withUnsafeBytes({ $0.load(as: IPHeader.self) })
