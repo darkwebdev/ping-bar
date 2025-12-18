@@ -140,17 +140,22 @@ class PingManager: NSObject {
         }
 
         currentPinger = pinger
+
+        // Use a serial queue to synchronize access to response state flags
+        let responseQueue = DispatchQueue(label: "PingManager.response.\(host)")
         var responseReceived = false
         var errorReported = false
 
         pinger?.observer = { [weak self] response in
             guard let self = self else { return }
             self.log("[OBSERVER CALLBACK] received for \(host), error: \(String(describing: response.error))")
-            responseReceived = true
+
+            // Thread-safe flag update
+            responseQueue.sync { responseReceived = true }
 
             // Check if there was an error in the response
             if let error = response.error {
-                errorReported = true
+                responseQueue.sync { errorReported = true }
                 self.log("[OBSERVER ERROR] \(host) error: \(error)")
                 let friendly = self.userFriendlyErrorMessage(from: error)
                 DispatchQueue.main.async { self.delegate?.pingManager(self, didFailWithError: friendly) }
@@ -171,7 +176,7 @@ class PingManager: NSObject {
             try pinger?.startPinging()
             log("started pinger for \(host)")
         } catch {
-            errorReported = true
+            responseQueue.sync { errorReported = true }
             let friendly = userFriendlyErrorMessage(from: error)
             DispatchQueue.main.async { [weak self] in guard let self = self else { return }; self.delegate?.pingManager(self, didFailWithError: friendly) }
             recordFailure()
@@ -183,7 +188,9 @@ class PingManager: NSObject {
         let timeoutSeconds: Double = 2.0
         DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
             guard let self = self else { return }
-            if !responseReceived && !errorReported {
+            // Thread-safe flag check
+            let shouldReportTimeout = responseQueue.sync { !responseReceived && !errorReported }
+            if shouldReportTimeout {
                 DispatchQueue.main.async { self.delegate?.pingManager(self, didFailWithError: "Timeout - no response from \(host)") }
                 self.recordFailure()
                 self.log("timeout waiting for response from \(host)")
