@@ -121,7 +121,7 @@ class HostMenuItemView: NSView {
         pingLabel.isBordered = false
         pingLabel.backgroundColor = .clear
         pingLabel.font = NSFont.menuFont(ofSize: 9)
-        pingLabel.textColor = .secondaryLabelColor
+        pingLabel.textColor = NSColor.tertiaryLabelColor
         addSubview(pingLabel)
         
         // Mini graph
@@ -377,7 +377,8 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     
     private func createPopupMenu(with hosts: [HostData]) -> NSMenu {
         let menu = NSMenu()
-        
+        menu.appearance = NSAppearance(named: .aqua)
+
         addStatusItems(for: hosts, to: menu)
         addSettingsItems(to: menu)
         
@@ -524,22 +525,16 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         let getServiceScript = NSAppleScript(source: getServiceScriptSource)
         var serviceError: NSDictionary?
         let serviceResult = getServiceScript?.executeAndReturnError(&serviceError)
-        
+
         guard let serviceName = serviceResult?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !serviceName.isEmpty else {
-            showError("Failed to detect Wi-Fi service. Please ensure Wi-Fi is enabled and try again.")
             return
         }
-        
+
         // Execute the command with privileges
         let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" 8.8.8.8\" with administrator privileges"
         let setDNSScript = NSAppleScript(source: setDNSScriptSource)
         var setError: NSDictionary?
         let setResult = setDNSScript?.executeAndReturnError(&setError)
-        if let setError = setError {
-            showError("Failed to add DNS server: \(setError.description)")
-        } else {
-            showSuccess("Added 8.8.8.8 to DNS list.")
-        }
     }
     
     @objc private func removeGoogleDNS() {
@@ -550,22 +545,16 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         let getServiceScript = NSAppleScript(source: getServiceScriptSource)
         var serviceError: NSDictionary?
         let serviceResult = getServiceScript?.executeAndReturnError(&serviceError)
-        
+
         guard let serviceName = serviceResult?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !serviceName.isEmpty else {
-            showError("Failed to detect Wi-Fi service. Please ensure Wi-Fi is enabled and try again.")
             return
         }
-        
+
         // Execute the command with privileges
         let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" empty\" with administrator privileges"
         let setDNSScript = NSAppleScript(source: setDNSScriptSource)
         var setError: NSDictionary?
         let setResult = setDNSScript?.executeAndReturnError(&setError)
-        if let setError = setError {
-            showError("Failed to remove DNS servers: \(setError.description)")
-        } else {
-            showSuccess("Removed DNS servers.")
-        }
     }
     
     private func isUserAdmin() -> Bool {

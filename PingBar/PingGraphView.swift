@@ -39,14 +39,29 @@ class PingGraphView: NSView {
             height: bounds.height - 4
         )
         
-        guard !hostData.isEmpty && graphRect.width > 0 else { return }
-        
+        guard !hostData.isEmpty && graphRect.width > 0 else {
+            drawNoDataIndicator(in: graphRect)
+            return
+        }
+
         // Find the maximum number of data points across all hosts
         let maxDataPoints = hostData.map { $0.pingHistory.count }.max() ?? 0
-        guard maxDataPoints > 0 else { return }
-        
+        guard maxDataPoints > 0 else {
+            drawNoDataIndicator(in: graphRect)
+            return
+        }
+
+        // Check if any host has successful pings
+        let hasAnySuccessfulPings = hostData.contains { host in
+            host.pingHistory.contains(where: { $0 > 0 })
+        }
+        guard hasAnySuccessfulPings else {
+            drawNoDataIndicator(in: graphRect)
+            return
+        }
+
         let pointWidth: CGFloat = graphRect.width / CGFloat(max(1, maxDataPoints - 1))
-        
+
         // Draw each host's line graph
         for host in hostData {
             drawLineGraph(for: host, in: graphRect, pointWidth: pointWidth)
@@ -98,39 +113,57 @@ class PingGraphView: NSView {
     
     private func drawLineGraph(for host: HostData, in graphRect: NSRect, pointWidth: CGFloat) {
         guard host.pingHistory.count > 1 else { return }
-        
+
         var previousPoint: NSPoint?
-        
+
         for (index, ping) in host.pingHistory.enumerated() {
-            let x = graphRect.minX + CGFloat(index) * pointWidth
-            var y: CGFloat
-            
-            if ping > 0 {
-                // Convert ping time to logarithmic scale for better visualization
-                let logValue = Foundation.log10(Double(ping) + 1.0)
-                let maxLogValue = Foundation.log10(201.0) // log10(200 + 1) for max scale
-                let normalizedHeight = CGFloat(logValue / maxLogValue)
-                y = graphRect.minY + normalizedHeight * graphRect.height
-            } else {
-                // For failed pings (0), draw at the bottom of the graph
-                y = graphRect.minY
+            // Skip failed pings entirely - don't draw them
+            guard ping > 0 else {
+                // Reset previous point so we don't draw a line from last good ping to next good ping
+                previousPoint = nil
+                continue
             }
-            
+
+            let x = graphRect.minX + CGFloat(index) * pointWidth
+
+            // Convert ping time to logarithmic scale for better visualization
+            let logValue = Foundation.log10(Double(ping) + 1.0)
+            let maxLogValue = Foundation.log10(201.0) // log10(200 + 1) for max scale
+            let normalizedHeight = CGFloat(logValue / maxLogValue)
+            let y = graphRect.minY + normalizedHeight * graphRect.height
+
             let currentPoint = NSPoint(x: x, y: y)
-            
+
             if let prevPoint = previousPoint {
                 // Draw line segment with color based on current ping value
                 let path = NSBezierPath()
                 path.move(to: prevPoint)
                 path.line(to: currentPoint)
-                
+
                 // Set color based on ping value
                 colorForPing(ping).setStroke()
                 path.lineWidth = 1.5
                 path.stroke()
             }
-            
+
             previousPoint = currentPoint
         }
+    }
+
+    private func drawNoDataIndicator(in rect: NSRect) {
+        let message = "No response"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]
+
+        let attributedString = NSAttributedString(string: message, attributes: attributes)
+        let size = attributedString.size()
+        let point = NSPoint(
+            x: rect.minX + (rect.width - size.width) / 2,
+            y: rect.minY + (rect.height - size.height) / 2
+        )
+
+        attributedString.draw(at: point)
     }
 }

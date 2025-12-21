@@ -86,13 +86,21 @@ class PopupMenuPingGraphView: NSView {
             drawNoDataIndicator()
             return
         }
-        
+
         // Use the current max history setting instead of hardcoded maxDisplayPoints
         let maxDisplayPoints = HostMenuItemView.currentMaxHistory
         let displayHistory = Array(history.suffix(maxDisplayPoints))
+
+        // Check if all pings are failed (all zeros)
+        let hasSuccessfulPings = displayHistory.contains(where: { $0 > 0 })
+        guard hasSuccessfulPings else {
+            drawNoDataIndicator()
+            return
+        }
+
         let maxPing = displayHistory.filter { $0 > 0 }.max() ?? 100
         let adjustedMax = max(maxPing, 20) // Minimum scale of 20ms
-        
+
         drawGraph(history: displayHistory, maxValue: adjustedMax)
         // Removed drawCurrentStatus() - no circle on right side
     }
@@ -108,24 +116,20 @@ class PopupMenuPingGraphView: NSView {
         // Draw bars without gaps (as originally requested)
         for (index, ping) in history.enumerated() {
             let x = graphRect.minX + CGFloat(index) * barWidth
-            
+
             // Only draw bars that fit within the graph area
             guard x + barWidth <= graphRect.maxX else { break }
-            
-            if ping == 0 {
-                // Unknown/failed ping - draw neutral gray bar (offline dot indicates permanent offline)
-                let barRect = NSRect(x: x, y: graphRect.minY, width: barWidth, height: graphRect.height)
-                NSColor.systemGray.setFill()
-                barRect.fill()
-            } else {
-                // Calculate bar height based on ping value
-                let normalizedHeight = Double(ping) / Double(maxValue)
-                let barHeight = CGFloat(normalizedHeight) * graphRect.height
-                let actualBarRect = NSRect(x: x, y: graphRect.minY, width: barWidth, height: barHeight)
-                
-                // Draw gradient bar from cyan (bottom) to ping-based color (top)
-                drawGradientBar(in: actualBarRect, ping: ping)
-            }
+
+            // Skip drawing entirely for failed pings (ping == 0)
+            guard ping > 0 else { continue }
+
+            // Calculate bar height based on ping value
+            let normalizedHeight = Double(ping) / Double(maxValue)
+            let barHeight = CGFloat(normalizedHeight) * graphRect.height
+            let actualBarRect = NSRect(x: x, y: graphRect.minY, width: barWidth, height: barHeight)
+
+            // Draw gradient bar from cyan (bottom) to ping-based color (top)
+            drawGradientBar(in: actualBarRect, ping: ping)
         }
     }
     
@@ -173,8 +177,19 @@ class PopupMenuPingGraphView: NSView {
     }
     
     private func drawNoDataIndicator() {
-        NSColor.systemGray.setFill()
-        let rect = NSRect(x: bounds.width/2 - 2, y: bounds.height/2 - 2, width: 4, height: 4)
-        rect.fill()
+        let message = "No response"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]
+
+        let attributedString = NSAttributedString(string: message, attributes: attributes)
+        let size = attributedString.size()
+        let point = NSPoint(
+            x: (bounds.width - size.width) / 2,
+            y: (bounds.height - size.height) / 2
+        )
+
+        attributedString.draw(at: point)
     }
 }
