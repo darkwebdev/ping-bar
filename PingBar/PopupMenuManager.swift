@@ -377,7 +377,7 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
     
     private func createPopupMenu(with hosts: [HostData]) -> NSMenu {
         let menu = NSMenu()
-        menu.appearance = NSAppearance(named: .aqua)
+        menu.appearance = NSApp.effectiveAppearance
 
         addStatusItems(for: hosts, to: menu)
         addSettingsItems(to: menu)
