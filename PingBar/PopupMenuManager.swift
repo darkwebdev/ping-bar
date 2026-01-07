@@ -534,7 +534,7 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" 8.8.8.8\" with administrator privileges"
         let setDNSScript = NSAppleScript(source: setDNSScriptSource)
         var setError: NSDictionary?
-        let setResult = setDNSScript?.executeAndReturnError(&setError)
+        _ = setDNSScript?.executeAndReturnError(&setError)
     }
     
     @objc private func removeGoogleDNS() {
@@ -554,7 +554,7 @@ class PopupMenuManager: NSObject, NSMenuDelegate {
         let setDNSScriptSource = "do shell script \"networksetup -setdnsservers \\\"\(serviceName)\\\" empty\" with administrator privileges"
         let setDNSScript = NSAppleScript(source: setDNSScriptSource)
         var setError: NSDictionary?
-        let setResult = setDNSScript?.executeAndReturnError(&setError)
+        _ = setDNSScript?.executeAndReturnError(&setError)
     }
     
     private func isUserAdmin() -> Bool {
